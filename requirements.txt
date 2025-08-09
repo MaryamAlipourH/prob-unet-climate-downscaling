@@ -1,0 +1,10 @@
+Bottleneck==1.4.0
+Cartopy==0.23.0
+dask==2024.7.1
+distributed==2024.7.1
+matplotlib==3.8.4
+numpy==2.0.0
+torch==2.3.1
+tqdm==4.66.4
+wandb==0.17.5
+xarray==2024.6.0
