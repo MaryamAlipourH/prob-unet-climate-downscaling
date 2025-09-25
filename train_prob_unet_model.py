@@ -34,7 +34,6 @@ def get_args():
     parser.add_argument('--lowres_scale', type=int, default=16)
     parser.add_argument('--timetransform', type=str, default='id', choices=['id', 'cyclic'])
     parser.add_argument('--beta', type=float, default=0.0)
-    parser.add_argument('--beta_2', type=float, default=0.0)
     parser.add_argument('--warmup_epochs', type=int, default=10, help='Number of warmup epochs for beta_2 increase')
     parser.add_argument('--loss_type', type=str, default='mse+ssim', choices=['afcrps', 'crps', 'mse+ssim'])
 
@@ -178,7 +177,7 @@ def train_probunet_step(model, dataloader, optimizer, epoch, num_epochs, device,
         mean_kl2   (float): Average KL divergence (posterior vs standard Gaussian)
     """
     model.train()
-    recon_vals, kl_vals, kl2_vals = [], [], []
+    recon_vals, kl_vals, wmse_vals, msssim_vals = [], [], [], [],
 
 
     with tqdm(total=len(dataloader), dynamic_ncols=True) as tq:
@@ -192,9 +191,9 @@ def train_probunet_step(model, dataloader, optimizer, epoch, num_epochs, device,
 
             # Forward pass: get total ELBO-like loss (with afCRPS),
             # plus the scalar CRPS, KL, KL2 for logging
-            loss, recon_list, kl_div, kl_div2 = model.elbo(
+            loss, recon_list, kl_div, wmse, msssim = model.elbo(
                 inputs, targets, timestamps, 
-                M=1 
+                M=ensemble_size 
             )
 
             # Backprop and optimize
@@ -205,16 +204,18 @@ def train_probunet_step(model, dataloader, optimizer, epoch, num_epochs, device,
             # crps_list is just [crps_value], so record it
             recon_vals.append(recon_list[0])
             kl_vals.append(kl_div.mean().item())
-            kl2_vals.append(kl_div2.mean().item())
+            wmse_vals.append(wmse)
+            msssim_vals.append(msssim)
 
             # Show running loss in the progress bar
             tq.set_postfix_str(s=f"Loss: {loss.item():.4f}")
 
     mean_crps = float(np.mean(recon_vals))
     mean_kl = float(np.mean(kl_vals))
-    mean_kl2 = float(np.mean(kl2_vals))
+    mean_wmse = float(np.mean(wmse_vals))
+    mean_msssim = float(np.mean(msssim_vals))
 
-    return mean_crps, mean_kl, mean_kl2
+    return mean_crps, mean_kl, mean_wmse, mean_msssim
 
 # @torch.no_grad()
 # def eval_probunet_model(model, dataloader, reconstruct, device):
@@ -320,8 +321,9 @@ def eval_probunet_model(model, dataloader, device, ensemble_size=5):
     model.eval()
     crps_vals = []
     kl_vals = []
-    kl2_vals = []
-    
+    wmse_vals = []
+    msssim_vals = []
+
     with tqdm(total=len(dataloader), dynamic_ncols=True) as tq:
         tq.set_description(":: Evaluation ::")
 
@@ -332,7 +334,7 @@ def eval_probunet_model(model, dataloader, device, ensemble_size=5):
             timestamps = batch['timestamps'].unsqueeze(dim=1).to(device)
 
             # Call your ELBO with multiple ensemble samples => returns afCRPS
-            loss, crps_list, kl_div, kl_div2 = model.elbo(
+            loss, crps_list, kl_div, wmse, msssim = model.elbo(
                 inputs, targets, timestamps, 
                 M=ensemble_size
             )
@@ -340,15 +342,16 @@ def eval_probunet_model(model, dataloader, device, ensemble_size=5):
             # crps_list is just [afCRPS_value], so we take crps_list[0].
             crps_vals.append(crps_list[0])
             kl_vals.append(kl_div.mean().item())
-            kl2_vals.append(kl_div2.mean().item())
+            wmse_vals.append(wmse)
+            msssim_vals.append(msssim)
 
     mean_crps = float(np.mean(crps_vals))
     mean_kl = float(np.mean(kl_vals))
-    mean_kl2 = float(np.mean(kl2_vals))
+    mean_wmse = float(np.mean(wmse_vals))
+    mean_msssim = float(np.mean(msssim_vals))
 
-    return mean_crps, mean_kl, mean_kl2
+    return mean_crps, mean_kl, mean_wmse, mean_msssim
 
-    
 
 @torch.no_grad()
 def sample_probunet_model(model, dataloader, epoch, device, batch=None):

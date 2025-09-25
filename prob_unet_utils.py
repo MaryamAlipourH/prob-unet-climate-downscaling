@@ -267,11 +267,12 @@ def crps_loss(ensemble_pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor
     # Final loss: average over batch, channels, height, width
     return crps.mean()
 
-def wmse_ms_ssim_loss(pred: torch.Tensor,
+def  wmse_ms_ssim_loss(pred: torch.Tensor,
                       target: torch.Tensor,
                       alpha: float = 0.007,
                       beta:  float = 0.048,
                       lam:   float = 0.000,
+                      return_components: bool = False,
                       data_range: float | None = None) -> torch.Tensor:
     """
     Implements L_λ(y,ŷ) = λ·WMSE + (1-λ)·(1-MS-SSIM)
@@ -296,5 +297,9 @@ def wmse_ms_ssim_loss(pred: torch.Tensor,
     msssim_val = ms_ssim(pred, target, data_range=data_range, size_average=True, win_size=7)
     msssim_loss = 1.0 - msssim_val          # lower is better
 
-    # --- convex combination ------------------------------------------
-    return lam * wmse + (1.0 - lam) * msssim_loss
+    combined_loss = lam * wmse + (1.0 - lam) * msssim_loss
+
+    if return_components:
+        return combined_loss, wmse, msssim_loss
+    else:
+        return combined_loss
