@@ -84,57 +84,150 @@ class AxisAlignedConvGaussian(nn.Module):
         dist = Independent(Normal(loc=mu, scale=torch.exp(log_sigma) + 1e-7), 1)
         return dist
 
+# class Fcomb(nn.Module):
+#     """
+#     Combines the UNet features with the latent variable z to produce the final output.
+#     """
+
+#     def __init__(self, unet_output_channels, latent_dim, num_classes):
+#         super(Fcomb, self).__init__()
+#         self.latent_dim = latent_dim
+#         self.num_classes = num_classes
+#         self.channel_axis = 1
+#         self.spatial_axes = [2, 3]
+
+#         self.layers = nn.Sequential(
+#             nn.Conv2d(unet_output_channels + latent_dim, unet_output_channels, kernel_size=1),
+#             nn.ReLU(inplace=True),
+#             nn.Conv2d(unet_output_channels, unet_output_channels, kernel_size=1),
+#             nn.ReLU(inplace=True),
+#             nn.Conv2d(unet_output_channels, num_classes, kernel_size=1)
+#         )
+
+#         self.apply(init_weights)
+
+#     def tile(self, a, dim, n_tile):
+#         """
+#         This function mimics TensorFlow's `tile()` function for PyTorch.
+#         """
+#         init_dim = a.size(dim)
+#         repeat_idx = [1] * a.dim()
+#         repeat_idx[dim] = n_tile
+#         a = a.repeat(*repeat_idx)
+#         order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])).to(device)
+#         return torch.index_select(a, dim, order_index)
+
+#     def forward(self, feature_map, z):
+#         """
+#         Forward pass to combine UNet features with latent variable.
+#         Args:
+#             feature_map (torch.Tensor): Feature map from UNet.
+#             z (torch.Tensor): Sampled latent variable.
+#         Returns:
+#             output (torch.Tensor): The final output tensor.
+#         """
+#         # Tile z to match feature map size
+#         z = torch.unsqueeze(z, 2)
+#         z = self.tile(z, 2, feature_map.shape[self.spatial_axes[0]])
+#         z = torch.unsqueeze(z, 3)
+#         z = self.tile(z, 3, feature_map.shape[self.spatial_axes[1]])
+
+#         # Concatenate feature map and latent variable
+#         feature_map = torch.cat((feature_map, z), dim=self.channel_axis)
+#         output = self.layers(feature_map)
+#         return output
+
+# New fcomb with skip connection and improved latent processing
 class Fcomb(nn.Module):
     """
-    Combines the UNet features with the latent variable z to produce the final output.
+    Combines UNet features with latent variable z using a skip connection.
     """
-
+    
     def __init__(self, unet_output_channels, latent_dim, num_classes):
         super(Fcomb, self).__init__()
         self.latent_dim = latent_dim
         self.num_classes = num_classes
-        self.channel_axis = 1
         self.spatial_axes = [2, 3]
-
-        self.layers = nn.Sequential(
-            nn.Conv2d(unet_output_channels + latent_dim, unet_output_channels, kernel_size=1),
+        
+        # Process latent variable with expanded capacity
+        self.latent_processor = nn.Sequential(
+            nn.Conv2d(latent_dim, latent_dim * 2, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(unet_output_channels, unet_output_channels, kernel_size=1),
+            nn.Conv2d(latent_dim * 2, latent_dim, kernel_size=1),
+            nn.ReLU(inplace=True)
+        )
+        
+        # Combine UNet features + processed latent
+        self.combine = nn.Sequential(
+            nn.Conv2d(unet_output_channels + latent_dim, unet_output_channels, kernel_size=1),
             nn.ReLU(inplace=True),
             nn.Conv2d(unet_output_channels, num_classes, kernel_size=1)
         )
-
+        
+        # Skip connection (baseline from UNet alone)
+        self.skip = nn.Conv2d(unet_output_channels, num_classes, kernel_size=1)
+        
         self.apply(init_weights)
-
+    
     def tile(self, a, dim, n_tile):
-        """
-        This function mimics TensorFlow's `tile()` function for PyTorch.
-        """
+        """Tile tensor along specified dimension."""
         init_dim = a.size(dim)
         repeat_idx = [1] * a.dim()
         repeat_idx[dim] = n_tile
         a = a.repeat(*repeat_idx)
-        order_index = torch.LongTensor(np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])).to(device)
+        order_index = torch.LongTensor(
+            np.concatenate([init_dim * np.arange(n_tile) + i for i in range(init_dim)])
+        ).to(a.device)
         return torch.index_select(a, dim, order_index)
-
+    
     def forward(self, feature_map, z):
         """
-        Forward pass to combine UNet features with latent variable.
         Args:
-            feature_map (torch.Tensor): Feature map from UNet.
-            z (torch.Tensor): Sampled latent variable.
+            feature_map: UNet output features [B, 32, H, W]
+            z: Latent variable [B, latent_dim] or [B, latent_dim, 1, 1]
+        
         Returns:
-            output (torch.Tensor): The final output tensor.
+            output: [B, num_classes, H, W]
         """
-        # Tile z to match feature map size
-        z = torch.unsqueeze(z, 2)
-        z = self.tile(z, 2, feature_map.shape[self.spatial_axes[0]])
-        z = torch.unsqueeze(z, 3)
-        z = self.tile(z, 3, feature_map.shape[self.spatial_axes[1]])
-
-        # Concatenate feature map and latent variable
-        feature_map = torch.cat((feature_map, z), dim=self.channel_axis)
-        output = self.layers(feature_map)
+        # Ensure z has 4 dimensions [B, C, H, W]
+        if z.dim() == 2:
+            # z shape: [B, latent_dim] → [B, latent_dim, 1, 1]
+            z = z.unsqueeze(-1).unsqueeze(-1)
+        elif z.dim() == 3:
+            # z shape: [B, latent_dim, 1] → [B, latent_dim, 1, 1]
+            z = z.unsqueeze(-1)
+        
+        # Now z is [B, latent_dim, 1, 1]
+        # Tile to match spatial dimensions of feature_map
+        # feature_map: [B, C, H, W]
+        H, W = feature_map.shape[2], feature_map.shape[3]
+        
+        # Tile along height (dim=2)
+        z_tiled = self.tile(z, dim=2, n_tile=H)
+        # Tile along width (dim=3)
+        z_tiled = self.tile(z_tiled, dim=3, n_tile=W)
+        
+        # z_tiled: [B, latent_dim, H, W]
+        
+        # Process latent through dedicated pathway
+        z_processed = self.latent_processor(z_tiled)
+        # z_processed: [B, latent_dim, H, W]
+        
+        # Concatenate UNet features + processed latent
+        combined = torch.cat([feature_map, z_processed], dim=1)
+        # combined: [B, unet_output_channels + latent_dim, H, W]
+        
+        # Generate modulation term from combined features
+        modulation = self.combine(combined)
+        # modulation: [B, num_classes, H, W]
+        
+        # Generate baseline from UNet features (skip path)
+        skip_output = self.skip(feature_map)
+        # skip_output: [B, num_classes, H, W]
+        
+        # Combine via addition (residual connection style)
+        output = skip_output + modulation
+        
         return output
 
 class ProbabilisticUNet(nn.Module):

@@ -194,7 +194,7 @@ def afcrps_loss(ensemble_pred: torch.Tensor,
     # Epsilon parameter from α
     eps = (1.0 - alpha) / M
 
-    # We will form the quantity (|x_j - y| + |x_k - y| - (1-ε)|x_j - x_k|) in a pairwise manner.
+    # formed the quantity (|x_j - y| + |x_k - y| - (1-ε)|x_j - x_k|) in a pairwise manner.
     # 1) Get |x_j - y| by broadcasting to [B, M, 1, C, H, W] and similarly for k.
     x_minus_y = ensemble_pred - target  # [B,M,C,H,W]
     xj_y = x_minus_y.unsqueeze(2)       # => [B, M, 1, C, H, W]

@@ -263,6 +263,16 @@ class climex2torch(Dataset):
 
         return (mean, std), (mean_hrdim, std_hrdim)
 
+    # # Compute statistics directly from high-resolution data
+    # def compute_stats(self):
+    #     hr_mean, hr_std = self.hr.mean(dim=0), self.hr.std(dim=0) 
+        
+    #     # Downsample HR statistics to LR dimensions for LR standardization
+    #     lr_mean = nn.AvgPool2d(kernel_size=self.lowres_scale)(hr_mean.unsqueeze(0)).squeeze(0)
+    #     lr_std = nn.AvgPool2d(kernel_size=self.lowres_scale)(hr_std.unsqueeze(0)).squeeze(0)
+        
+    #     return (lr_mean, lr_std), (hr_mean, hr_std)
+
     # Computes the inverse of the standardization for the residual
     def invstand_residual(self, standardized_residual):
         if self.type == "lr_to_hr" or self.type == "lrinterp_to_hr":

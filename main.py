@@ -1,16 +1,14 @@
+# Training model with afcrps
 import torch
 import matplotlib.pyplot as plt
-# from dask.distributed import Client
-
 import climex_utils as cu
 import train_prob_unet_model as tm  
 from prob_unet import ProbabilisticUNet
-from prob_unet_utils import plot_losses, plot_losses_mae
+# from prob_unet_utils import plot_losses, plot_losses_mae
 import pickle
 import numpy as np
 import random
 import os
-  
 
 if __name__ == "__main__":
 
@@ -37,7 +35,7 @@ if __name__ == "__main__":
     probunet_model = ProbabilisticUNet(
         input_channels=len(args.variables),
         num_classes=len(args.variables),
-        latent_dim=16,
+        latent_dim=32,
         num_filters=[32, 64, 128, 256],
         model_channels=32,
         channel_mult=[1, 2, 4, 8],
@@ -106,15 +104,15 @@ if __name__ == "__main__":
     # Example alternative:
     # optimizer = torch.optim.Adam(probunet_model.parameters(), lr=args.lr, weight_decay=1e-4)
 
-    # -- 6) We track CRPS, KL, KL2 each epoch for train/val
-    train_crps_list, train_kl_list, train_kl2_list = [], [], []
-    val_crps_list,   val_kl_list,   val_kl2_list   = [], [], []
+    # -- 6) We track CRPS, KL each epoch for train/val
+    train_crps_list, train_kl_list = [], []
+    val_crps_list,   val_kl_list = [], []
 
     # For convenience, we keep your adaptive betas:
     beta_0 = 1.0
     beta_1 = 0.0
-    beta_2 = 0.0
     warmup_epochs = 2
+    max_beta_1 = 1.0
 
     print(f"Probabilistic Unet Latent dim: {probunet_model.latent_dim}")
 
@@ -123,48 +121,51 @@ if __name__ == "__main__":
         # Set model betas
         probunet_model.beta_0 = beta_0
         probunet_model.beta_1 = beta_1
-        probunet_model.beta_2 = beta_2
 
         print(f"Epoch {epoch}/{args.num_epochs} - beta_0: {probunet_model.beta_0:.4f}, "
-              f"beta_1: {probunet_model.beta_1:.4f}, beta_2: {probunet_model.beta_2:.4f}")
+              f"beta_1: {probunet_model.beta_1:.4f}")
 
-        # 7a) Train for one epoch (returns mean_crps, mean_kl, mean_kl2)
-        train_crps, train_kl, train_kl2 = tm.train_probunet_step(
+        # 7a) Train for one epoch (returns mean_crps, mean_kl)
+        train_crps, train_kl = tm.train_probunet_step(
             model=probunet_model,
             dataloader=dataloader_train,
             optimizer=optimizer,
             epoch=epoch,
             num_epochs=args.num_epochs,
-            device=args.device,       
-            ensemble_size=1    # how many samples per forward pass
+            device=args.device,        
+            ensemble_size=15    # how many samples per forward pass
         )
         train_crps_list.append(train_crps)
         train_kl_list.append(train_kl)
-        train_kl2_list.append(train_kl2)
 
-        # 7b) Update betas after warmup
-        if epoch > warmup_epochs:
-            # beta_0 = 1.0 / (train_crps + 1e-7)
-            beta_0 = 1.0
-            beta_1 = 1.0 / (train_kl   + 1e-7)
-            # beta_2 = 1.0 / (train_kl2  + 1e-7)
-            beta_2 = 0.0
+        # 7b) Update betas with gradual annealing
+        if epoch <= warmup_epochs:
+            # Warmup phase: no KL penalty
+            beta_0, beta_1 = 1.0, 0.0
         else:
-            beta_0, beta_1, beta_2 = 1.0, 0.0, 0.0
+            # Annealing phase: gradually increase beta_1 from 0 to max_beta_1
+            # Progress goes from 0 (just after warmup) to 1 (at final epoch)
+            total_annealing_epochs = args.num_epochs - warmup_epochs
+            current_annealing_epoch = epoch - warmup_epochs
+            progress = min(current_annealing_epoch / total_annealing_epochs, 1.0)
+            
+            beta_0 = 1.0
+            beta_1 = progress * max_beta_1
+            
+            print(f"  → Annealing progress: {progress:.2%} | beta_1 = {beta_1:.4f}")
 
         # 7c) Evaluate on validation data
-        val_crps, val_kl, val_kl2 = tm.eval_probunet_model(
+        val_crps, val_kl = tm.eval_probunet_model(
             model=probunet_model,
             dataloader=dataloader_val,
             device=args.device,
-            ensemble_size=1
+            ensemble_size=5
         )
         val_crps_list.append(val_crps)
         val_kl_list.append(val_kl)
-        val_kl2_list.append(val_kl2)
 
-        print(f"[Train] CRPS={train_crps:.4f}, KL={train_kl:.4f}, KL2={train_kl2:.4f} | "
-              f"[Val] CRPS={val_crps:.4f}, KL={val_kl:.4f}, KL2={val_kl2:.4f}")
+        print(f"[Train] CRPS={train_crps:.4f}, KL={train_kl:.4f}| "
+              f"[Val] CRPS={val_crps:.4f}, KL={val_kl:.4f}")
 
         # 7d) Example sampling from the model for sanity checks
         test_batch = next(iter(dataloader_test_random))
@@ -209,14 +210,22 @@ if __name__ == "__main__":
     losses_to_save = {
         "train_crps": train_crps_list,
         "train_kl":   train_kl_list,
-        "train_kl2":  train_kl2_list,
         "val_crps":   val_crps_list,
         "val_kl":     val_kl_list,
-        "val_kl2":    val_kl2_list,
     }
     with open(f"{args.plotdir}/losses.pkl", "wb") as f:
         pickle.dump(losses_to_save, f)
 
+    # -- NEW: Analyze residual contribution
+    print("\n" + "="*60)
+    print("ANALYZING RESIDUAL CONTRIBUTION")
+    print("="*60)
+    tm.analyze_residual_contribution(
+        model=probunet_model,
+        dataloader=dataloader_test,
+        device=args.device,
+        num_samples=20
+    )
   
     epochs = np.arange(1, args.num_epochs+1)
     plt.plot(epochs, train_crps_list, label='Train CRPS')
