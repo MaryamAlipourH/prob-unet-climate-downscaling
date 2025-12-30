@@ -166,7 +166,7 @@ cython_debug/
 wandb/
 results/
 weight_analysis/
-weight_analysis_raw_hr/alpha_0.007_beta_0.0481/
+weight_analysis_raw_hr/
 .out
 
 # ipynb temps files
