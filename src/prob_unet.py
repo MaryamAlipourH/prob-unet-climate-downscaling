@@ -223,98 +223,98 @@ class ProbabilisticUNet(nn.Module):
         output = self.fcomb(unet_features, z)
         return output
     
-    # -----------------------------------------------------------------
-    # ELBO with WMSE-MS-SSIM reconstruction term
-    # -----------------------------------------------------------------
-    def elbo(self, x, target, t,
-             M: int = 1,                       # one posterior sample is enough here
-             alpha_w: float = 0.007,
-             beta_w:  float = 0.048,
-             lam_w:   float = 0.000):
-        """
-        ELBO = β₀·recon + β₁·KL(q‖p) + β₂·KL(q‖𝒩(0,I))
-
-        recon ≡ WMSE-MS-SSIM (Hess & Boers 2022).
-        """
-        # ─ encode ────────────────────────────────────────────────────
-        unet_features          = self.unet(x)
-        self.prior_latent_space     = self.prior(x)
-        self.posterior_latent_space = self.posterior(x, target)
-
-        # ─ draw M posterior samples and average their recon loss ────
-        recon_losses = []
-        for _ in range(M):
-            z = self.posterior_latent_space.rsample()
-            pred = self.fcomb(unet_features, z)        # [B,C,H,W]
-            loss, wmse, msssim = wmse_ms_ssim_loss(pred, target,
-                                     alpha=alpha_w, beta=beta_w, lam=lam_w, return_components=True)
-            recon_losses.append(loss)
-        recon_loss = torch.stack(recon_losses).mean()
-
-        # ─ KL terms ─────────────────────────────────────────────────
-        kl_div  = kl.kl_divergence(self.posterior_latent_space,
-                                   self.prior_latent_space)
-        standard_gaussian = Independent(
-            Normal(loc=torch.zeros_like(self.posterior_latent_space.base_dist.loc),
-                   scale=torch.ones_like(self.posterior_latent_space.base_dist.scale)), 1)
-        
-
-        # ─ total ────────────────────────────────────────────────────
-        total = (self.beta_0 * recon_loss
-               + self.beta_1 * kl_div.mean())
-
-        # for logging keep the scalar recon-only value
-        return total, [recon_loss.detach().cpu().item()], kl_div, wmse.detach().cpu().item(), msssim.detach().cpu().item()
-
-
     # # -----------------------------------------------------------------
-    # # The ELBO using afCRPS loss
+    # # ELBO with WMSE-MS-SSIM reconstruction term
     # # -----------------------------------------------------------------
-    # def elbo(self, x, target, t, M=5, alpha=0.95):
+    # def elbo(self, x, target, t,
+    #          M: int = 1,                       # one posterior sample is enough here
+    #          alpha_w: float = 0.007,
+    #          beta_w:  float = 0.048,
+    #          lam_w:   float = 0.000):
     #     """
-    #     Compute the 'ELBO' with an afCRPS reconstruction term.
+    #     ELBO = β₀·recon + β₁·KL(q‖p) + β₂·KL(q‖𝒩(0,I))
+
+    #     recon ≡ WMSE-MS-SSIM (Hess & Boers 2022).
     #     """
-
-    #     if M < 2:
-    #         raise ValueError(f"M must be at least 2 to compute afCRPS but got M={M}")
-    #     B = x.shape[0]
-
-    #     # 1) Encode features / distributions
-    #     unet_features = self.unet(x)
-    #     self.prior_latent_space = self.prior(x)
+    #     # ─ encode ────────────────────────────────────────────────────
+    #     unet_features          = self.unet(x)
+    #     self.prior_latent_space     = self.prior(x)
     #     self.posterior_latent_space = self.posterior(x, target)
 
-    #     # 2) Draw M samples from the posterior
-    #     ensemble = []
+    #     # ─ draw M posterior samples and average their recon loss ────
+    #     recon_losses = []
     #     for _ in range(M):
-    #         z_post = self.posterior_latent_space.rsample()
-    #         pred_sample = self.fcomb(unet_features, z_post)  # shape [B, C, H, W]
-    #         ensemble.append(pred_sample)
-    #     # Stack to [B, M, C, H, W]
-    #     ensemble_pred = torch.stack(ensemble, dim=1)
+    #         z = self.posterior_latent_space.rsample()
+    #         pred = self.fcomb(unet_features, z)        # [B,C,H,W]
+    #         loss, wmse, msssim = wmse_ms_ssim_loss(pred, target,
+    #                                  alpha=alpha_w, beta=beta_w, lam=lam_w, return_components=True)
+    #         recon_losses.append(loss)
+    #     recon_loss = torch.stack(recon_losses).mean()
 
-    #     # # 3) Compute afCRPS
-    #     crps = afcrps_loss(ensemble_pred, target, alpha=alpha)
-    #     # crps = crps_loss(ensemble_pred, target)
-
-    #     # 4) KL divergences
-    #     kl_div = kl.kl_divergence(self.posterior_latent_space, self.prior_latent_space)
+    #     # ─ KL terms ─────────────────────────────────────────────────
+    #     kl_div  = kl.kl_divergence(self.posterior_latent_space,
+    #                                self.prior_latent_space)
     #     standard_gaussian = Independent(
-    #         Normal(
-    #             loc=torch.zeros_like(self.posterior_latent_space.base_dist.loc),
-    #             scale=torch.ones_like(self.posterior_latent_space.base_dist.scale)
-    #         ),
-    #         1
-    #     )
+    #         Normal(loc=torch.zeros_like(self.posterior_latent_space.base_dist.loc),
+    #                scale=torch.ones_like(self.posterior_latent_space.base_dist.scale)), 1)
         
 
-    #     # 5) Combine
-    #     total_loss = (
-    #         self.beta_0 * crps
-    #       + self.beta_1 * kl_div.mean())
+    #     # ─ total ────────────────────────────────────────────────────
+    #     total = (self.beta_0 * recon_loss
+    #            + self.beta_1 * kl_div.mean())
 
-    #     # For logging, we might return them as well
-    #     return total_loss, [crps.item()], kl_div
+    #     # for logging keep the scalar recon-only value
+    #     return total, [recon_loss.detach().cpu().item()], kl_div, wmse.detach().cpu().item(), msssim.detach().cpu().item()
+
+
+    # -----------------------------------------------------------------
+    # The ELBO using afCRPS loss
+    # -----------------------------------------------------------------
+    def elbo(self, x, target, t, M=5, alpha=0.95):
+        """
+        Compute the 'ELBO' with an afCRPS reconstruction term.
+        """
+
+        if M < 2:
+            raise ValueError(f"M must be at least 2 to compute afCRPS but got M={M}")
+        B = x.shape[0]
+
+        # 1) Encode features / distributions
+        unet_features = self.unet(x)
+        self.prior_latent_space = self.prior(x)
+        self.posterior_latent_space = self.posterior(x, target)
+
+        # 2) Draw M samples from the posterior
+        ensemble = []
+        for _ in range(M):
+            z_post = self.posterior_latent_space.rsample()
+            pred_sample = self.fcomb(unet_features, z_post)  # shape [B, C, H, W]
+            ensemble.append(pred_sample)
+        # Stack to [B, M, C, H, W]
+        ensemble_pred = torch.stack(ensemble, dim=1)
+
+        # # 3) Compute afCRPS
+        crps = afcrps_loss(ensemble_pred, target, alpha=alpha)
+        # crps = crps_loss(ensemble_pred, target)
+
+        # 4) KL divergences
+        kl_div = kl.kl_divergence(self.posterior_latent_space, self.prior_latent_space)
+        standard_gaussian = Independent(
+            Normal(
+                loc=torch.zeros_like(self.posterior_latent_space.base_dist.loc),
+                scale=torch.ones_like(self.posterior_latent_space.base_dist.scale)
+            ),
+            1
+        )
+        
+
+        # 5) Combine
+        total_loss = (
+            self.beta_0 * crps
+          + self.beta_1 * kl_div.mean())
+
+        # For logging, we might return them as well
+        return total_loss, [crps.item()], kl_div
     
 
     

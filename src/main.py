@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
 import climex_utils as cu
 import train_prob_unet_model as tm  
 from prob_unet import ProbabilisticUNet
-# from prob_unet_utils import plot_losses, plot_losses_mae
 import pickle
 import numpy as np
 import random
